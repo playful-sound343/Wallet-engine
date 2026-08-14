@@ -1,0 +1,113 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: wallet
+      POSTGRES_PASSWORD: wallet
+      POSTGRES_DB: wallet
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wallet -d wallet"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: wallet
+      RABBITMQ_DEFAULT_PASS: wallet
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.60
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      web-api:
+        condition: service_healthy
+
+  web-api:
+    build: .
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://wallet:wallet@postgres:5432/wallet
+      ALEMBIC_DATABASE_URL: postgresql+psycopg2://wallet:wallet@postgres:5432/wallet
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: amqp://wallet:wallet@rabbitmq:5672//
+      JWT_SECRET: ${JWT_SECRET:-local-only-change-this-secret}
+      BOOTSTRAP_USERNAME: ${BOOTSTRAP_USERNAME:-wallet-demo}
+      BOOTSTRAP_PASSWORD: ${BOOTSTRAP_PASSWORD:-wallet-demo-password}
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-120}
+      WEBHOOK_URL: ${WEBHOOK_URL:-http://web-api:8000/webhooks/dev-receiver}
+      WEBHOOK_SIGNING_SECRET: ${WEBHOOK_SIGNING_SECRET:-local-webhook-secret}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-wallet-engine-api}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4317}
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+
+  celery-worker:
+    build: .
+    command: celery -A app.worker.celery_app worker --beat --loglevel=INFO
+    environment:
+      DATABASE_URL: postgresql+asyncpg://wallet:wallet@postgres:5432/wallet
+      ALEMBIC_DATABASE_URL: postgresql+psycopg2://wallet:wallet@postgres:5432/wallet
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: amqp://wallet:wallet@rabbitmq:5672//
+      JWT_SECRET: ${JWT_SECRET:-local-only-change-this-secret}
+      WEBHOOK_URL: ${WEBHOOK_URL:-http://web-api:8000/webhooks/dev-receiver}
+      WEBHOOK_SIGNING_SECRET: ${WEBHOOK_SIGNING_SECRET:-local-webhook-secret}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      web-api:
+        condition: service_healthy
+
+volumes:
+  postgres-data:

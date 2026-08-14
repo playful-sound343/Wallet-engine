@@ -1,0 +1,6 @@
+services:
+  web-api:
+    environment:
+      # CI intentionally removes the production-style 120 req/min client cap so
+      # the concurrency job exercises PostgreSQL locking rather than the limiter.
+      RATE_LIMIT_PER_MINUTE: 10000

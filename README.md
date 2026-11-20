@@ -4,7 +4,7 @@ A Docker-based transfer API that protects money records, prevents duplicate requ
 
 ## Architecture
 
-![Wallet engine architecture](docs/Architecture.png)
+![Wallet engine architecture](Architecture.png)
 
 1. A client sends an HTTP request with a bearer token to the **Web API** (FastAPI).
 2. **Redis** handles the idempotency claim/replay and per-user rate limiting.
